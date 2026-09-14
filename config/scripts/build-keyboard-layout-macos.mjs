@@ -21,7 +21,7 @@ if (process.platform !== 'darwin') {
 
 const args = process.argv.slice(2)
 const outputPath = readArg('--output') ?? defaultOutputPath
-const singleArch = args.includes('--single-arch')
+const singleArch = args.includes('--single-arch') || !hasFullXcodeToolchain()
 const workDir = mkdtempSync(path.join(tmpdir(), 'orca-keyboard-layout-'))
 
 try {
@@ -53,6 +53,18 @@ try {
   chmodSync(outputPath, 0o755)
 } finally {
   rmSync(workDir, { recursive: true, force: true })
+}
+
+function hasFullXcodeToolchain() {
+  // Why: Command Line Tools ship arm64-only Swift compatibility libs, so an
+  // x86_64 cross-link fails. Only a full Xcode can build the universal binary;
+  // otherwise build the native arch alone.
+  try {
+    const developerDir = execFileSync('xcode-select', ['-p'], { encoding: 'utf8' }).trim()
+    return !developerDir.includes('CommandLineTools')
+  } catch {
+    return false
+  }
 }
 
 function readArg(name) {

@@ -32,7 +32,7 @@ const bundleId = readArg('--bundle-id') ?? 'com.stablyai.orca'
 const outputPath = readArg('--output') ?? defaultOutputPath
 // Why: dev launches only need the host architecture; release builds ship a
 // universal binary matching the app's x64 + arm64 targets.
-const singleArch = args.includes('--single-arch')
+const singleArch = args.includes('--single-arch') || !hasFullXcodeToolchain()
 
 const workDir = path.join(tmpdir(), `orca-notification-status-${process.pid}`)
 mkdirSync(workDir, { recursive: true })
@@ -75,6 +75,18 @@ try {
   execFileSync('chmod', ['755', outputPath])
 } finally {
   rmSync(workDir, { recursive: true, force: true })
+}
+
+function hasFullXcodeToolchain() {
+  // Why: Command Line Tools ship arm64-only Swift compatibility libs, so an
+  // x86_64 cross-link fails. Only a full Xcode can build the universal binary;
+  // otherwise build the native arch alone.
+  try {
+    const developerDir = execFileSync('xcode-select', ['-p'], { encoding: 'utf8' }).trim()
+    return !developerDir.includes('CommandLineTools')
+  } catch {
+    return false
+  }
 }
 
 function readArg(name) {
