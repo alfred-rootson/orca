@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const repoRoot = path.resolve(import.meta.dirname, '../..')
@@ -28,11 +28,43 @@ chmodSync(binaryPath, 0o755)
 createHelperApp()
 
 function buildUniversalBinary() {
-  const builtBinaries = universalTriples.map((triple) => {
+  // Why: Swift 6.4 with Command Line Tools only (no full Xcode) ignores `--triple`
+  // and always writes `.build/release/`, so the per-arch inputs lipo wants never
+  // appear and cross-compiling to x86_64 is unavailable. Fall back to a native
+  // single-arch build in that case instead of failing the whole desktop build.
+  const builtBinaries = []
+  for (const triple of universalTriples) {
     run('swift', ['build', '-c', 'release', '--package-path', packagePath, '--triple', triple])
-    return path.join(packagePath, '.build', triple, 'release', 'orca-computer-use-macos')
-  })
+    const tripleBinary = path.join(
+      packagePath,
+      '.build',
+      triple,
+      'release',
+      'orca-computer-use-macos'
+    )
+    if (existsSync(tripleBinary)) {
+      builtBinaries.push(tripleBinary)
+      continue
+    }
+    // Why: this toolchain ignored `--triple` and wrote the default path instead.
+    // Keep only the binary that matches this machine, and stop asking for the
+    // other arch we cannot cross-compile without full Xcode.
+    const nativeTriple = process.arch === 'arm64' ? 'arm64-apple-macosx' : 'x86_64-apple-macosx'
+    if (triple !== nativeTriple) {
+      continue
+    }
+    const stagedNative = path.join(packagePath, '.build', 'native-orca-computer-use-macos')
+    copyFileSync(binaryPath, stagedNative)
+    builtBinaries.push(stagedNative)
+  }
   mkdirSync(path.dirname(binaryPath), { recursive: true })
+  if (builtBinaries.length === 0) {
+    throw new Error(`swift build produced no usable binary for ${binaryPath}`)
+  }
+  if (builtBinaries.length === 1) {
+    copyFileSync(builtBinaries[0], binaryPath)
+    return
+  }
   run('lipo', ['-create', ...builtBinaries, '-output', binaryPath])
 }
 
