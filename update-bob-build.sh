@@ -6,27 +6,33 @@ set -euo pipefail
 
 REPO="/Users/wojciech/Workspace/orca-bob"
 PR_NUM=20397
-# Our local commits, oldest-first. Update this list if you add more.
-# Only the build fixes + enable script get cherry-picked. The version bump is
-# done dynamically afterwards (bump-local-version.py), since the right number
-# depends on the newest upstream tag at update time.
-LOCAL_COMMITS=(
-  "7d7674749e"   # chore: add enable-bob.py
-  "37ab7a7491"   # fix(build): native single-arch fallback
-  "2f4381759e"   # fix(build): auto single-arch when only CLT
-  "89b879f395"   # chore: add update + dynamic version-bump scripts (these files)
-)
+# Local commits are discovered dynamically (see step 5): everything after the
+# marker commit, minus merges and version bumps. No hand-maintained list.
+
 
 cd "$REPO"
 
+# Marker = the commit just below our local work on the current branch
+# (the "PR + main" merge tip). Everything after it, minus merges, is ours.
+BASE_FILE=".bob-local-base"
+if [ ! -f "$BASE_FILE" ]; then
+  echo "ERROR: $BASE_FILE missing. Create it with the sha below your local commits:"
+  echo "  echo c283a39f27 > $BASE_FILE   # our upstream/main merge commit"
+  exit 1
+fi
+LOCAL_BASE=$(tr -d '[:space:]' < "$BASE_FILE")
+echo "local commits are everything after: $(git log -1 --format='%h %s' "$LOCAL_BASE")"
+
 echo "== 1. Save current branch as a dated backup =="
 STAMP=$(date +%Y%m%d-%H%M%S)
-git branch "bob-integration-bak-$STAMP" bob-integration
-echo "backup branch: bob-integration-bak-$STAMP"
+BACKUP_BRANCH="bob-integration-bak-$STAMP"
+git branch "$BACKUP_BRANCH" bob-integration
+echo "backup branch: $BACKUP_BRANCH"
 
 echo "== 2. Fetch latest PR head and main =="
 git fetch upstream main
-git fetch upstream "refs/pull/${PR_NUM}/head:pr-${PR_NUM}-new"
+git fetch --tags upstream
+git fetch -f upstream "refs/pull/${PR_NUM}/head:pr-${PR_NUM}-new"
 
 PR_NEW=$(git rev-parse "pr-${PR_NUM}-new")
 echo "latest PR head: $PR_NEW"
@@ -41,22 +47,38 @@ else
   echo "!! merge conflicts -- resolve them, 'git add', then 'git merge --continue', then re-run from step 5 manually"
   exit 2
 fi
+# The tip now (PR + main, before our local work) becomes next update's marker.
+NEW_LOCAL_BASE=$(git rev-parse HEAD)
 
 echo "== 5. Re-apply our local commits =="
-for c in "${LOCAL_COMMITS[@]}"; do
-  echo "  cherry-pick $c"
+# Local-only commits = everything after the marker on the backup branch,
+# excluding merges and excluding version bumps (those are redone in step 7).
+mapfile -t PICKS < <(
+  git log --reverse --no-merges --format='%H %s' "${LOCAL_BASE}..${BACKUP_BRANCH}" \
+    | grep -v -i 'bump .*version' \
+    | awk '{print $1}'
+)
+if [ ${#PICKS[@]} -eq 0 ]; then
+  echo "  (none found -- check $BASE_FILE)"
+fi
+for c in "${PICKS[@]}"; do
+  echo "  cherry-pick $(git log -1 --format='%h %s' "$c")"
   if ! git cherry-pick "$c"; then
-    echo "!! cherry-pick conflict on $c -- resolve, 'git add', 'git cherry-pick --continue', then re-run remaining picks manually"
+    echo "!! conflict on $c -- resolve, 'git add', 'git cherry-pick --continue', then re-run the rest manually"
     exit 3
   fi
 done
 
-echo "== 6. Bump version above newest upstream tag + installed apps =="
-python3 bump-local-version.py
-git add package.json
-git commit --no-verify -m "chore: bump local build version above latest upstream" || echo "(no version change)"
+echo "== 6. Record new local base for next update =="
+echo "$NEW_LOCAL_BASE" > "$BASE_FILE"
 
-echo "== 7. Done. New history: =="
+echo "== 7. Bump version above newest upstream tag + installed apps =="
+python3 bump-local-version.py
+git add package.json "$BASE_FILE"
+git commit --no-verify -m "chore: bump local build version + record base $NEW_LOCAL_BASE" || echo "(nothing to commit)"
+
+echo "== 8. Done. New history: =="
 git log --oneline -8
 echo
-echo "Next: verify then rebuild (see update notes)."
+echo "Backup of previous branch: $BACKUP_BRANCH"
+echo "Next: verify (pnpm typecheck) then rebuild (see update notes)."
