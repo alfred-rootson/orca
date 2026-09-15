@@ -11,9 +11,10 @@ PR_NUM=20397
 # done dynamically afterwards (bump-local-version.py), since the right number
 # depends on the newest upstream tag at update time.
 LOCAL_COMMITS=(
-  "7d7674749e"   # chore: add enable-bob.py + helper scripts
+  "7d7674749e"   # chore: add enable-bob.py
   "37ab7a7491"   # fix(build): native single-arch fallback
   "2f4381759e"   # fix(build): auto single-arch when only CLT
+  "89b879f395"   # chore: add update + dynamic version-bump scripts (these files)
 )
 
 cd "$REPO"
